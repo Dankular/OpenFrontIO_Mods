@@ -7,15 +7,19 @@ game ([source](https://github.com/openfrontio/OpenFrontIO)).
 This is an **unofficial, third-party** collection. It isn't affiliated with
 or endorsed by the OpenFront project. Everything here works by observing the
 game client at runtime in your own browser — nothing here modifies the
-server, automates play, or gives an unfair advantage over what's already
-visible on your screen. Things may break whenever the upstream client
-changes; see each mod's README for how it hooks in and what to check first.
+server or automates play (clicks, builds, attacks — all still on you).
+Some mods surface information that isn't otherwise on screen (e.g.
+predicted bot behavior); where that's the case, its README says so
+explicitly and is upfront about how reliable it actually is. Things may
+break whenever the upstream client changes; see each mod's README for how
+it hooks in and what to check first.
 
 ## Mods
 
 | Mod | Type | Description |
 | --- | --- | --- |
 | [`extensions/spawn-highlighter`](extensions/spawn-highlighter) | Browser extension | Animated highlights over Nation and Tribe territories while you're picking a spawn point. |
+| [`extensions/attack-radar`](extensions/attack-radar) | Browser extension | Predicts when Nation/Tribe bots will next decide whether to attack, and guesses their likely target. |
 
 More to come — see [Ideas](#ideas) below.
 
@@ -38,6 +42,8 @@ Rough backlog for future mods in this collection:
 - Alliance web visualizer (who's allied with whom, at a glance)
 - Nuke/MIRV incoming-threat radar
 - Replay analysis / stats export tooling
+- Real border-adjacency lookup (via `PlayerView#borderTiles()`) to sharpen
+  `attack-radar`'s target guessing beyond the current proximity heuristic
 
 Opening an issue with a mod idea (or a PR) is welcome.
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Generates the spawn-highlighter extension icons as plain PNGs, with no
- * dependencies beyond Node's built-in zlib. Renders at 4x supersampling and
- * box-downsamples for anti-aliasing, since there's no canvas/image library
- * available in this environment.
+ * Generates extension icons as plain PNGs, with no dependencies beyond
+ * Node's built-in zlib. Renders at 4x supersampling and box-downsamples for
+ * anti-aliasing, since there's no canvas/image library available in this
+ * environment.
  *
  * Usage: node scripts/make-icons.js
  */
@@ -12,35 +12,57 @@ const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 
-const OUT_DIR = path.join(
-  __dirname,
-  "..",
-  "extensions",
-  "spawn-highlighter",
-  "icons",
-);
-
 const SIZES = [16, 48, 128];
 const SUPERSAMPLE = 4;
 
-// Palette matches content.js's NATION_COLOR / TRIBE_COLOR.
-const BG = [17, 24, 39]; // slate-900-ish
-const GOLD = [255, 201, 74]; // nation ring
-const CYAN = [72, 229, 255]; // tribe ring
+const BG = [17, 24, 39]; // slate-900-ish, shared across all icons
+
+// Each target draws its own layers via `draw(layers, ss)`, where `layers`
+// exposes the primitive drawing ops below (ring/dot/wedge), and `ss` is the
+// supersampled canvas size in px so shapes can be positioned proportionally.
+const TARGETS = [
+  {
+    outDir: ["extensions", "spawn-highlighter", "icons"],
+    // Two concentric "breathing rings" + a center dot, echoing the
+    // highlight animation content.js draws over Nation/Tribe territory.
+    draw(layers, ss) {
+      layers.ring(ss * 0.36, ss * 0.075, [255, 201, 74], 0.95); // gold
+      layers.ring(ss * 0.22, ss * 0.065, [72, 229, 255], 0.95); // cyan
+      layers.dot(ss * 0.05, [255, 255, 255], 0.9);
+    },
+  },
+  {
+    outDir: ["extensions", "attack-radar", "icons"],
+    // A radar bezel with a sweeping wedge and a red target blip, evoking
+    // the "who's about to get attacked" scan this mod performs.
+    draw(layers, ss) {
+      layers.ring(ss * 0.36, ss * 0.045, [255, 201, 74], 0.9); // amber bezel
+      layers.wedge(ss * 0.36, -100, -20, [255, 201, 74], 0.35); // sweep
+      layers.dot(ss * 0.045, [255, 255, 255], 0.5); // radar origin
+      layers.dot(ss * 0.06, [255, 90, 90], 0.95, {
+        x: ss * 0.24,
+        y: -ss * 0.14,
+      }); // target blip, offset from center
+      layers.ring(ss * 0.14, ss * 0.035, [255, 90, 90], 0.8, {
+        x: ss * 0.24,
+        y: -ss * 0.14,
+      }); // blip's danger ring
+    },
+  },
+];
 
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-/** Render one icon at `size` px into an RGBA buffer. */
-function renderIcon(size) {
+/** Render one icon at `size` px into an RGBA buffer for the given target. */
+function renderIcon(target, size) {
   const ss = size * SUPERSAMPLE;
-  const big = new Float64Array(ss * ss * 4); // accumulate as premultiplied-ish RGBA
+  const big = new Float64Array(ss * ss * 4);
 
   const set = (x, y, rgb, alpha) => {
     if (x < 0 || y < 0 || x >= ss || y >= ss) return;
     const i = (y * ss + x) * 4;
-    // Simple over-blend against whatever's already there.
     const srcA = alpha;
     const dstA = big[i + 3];
     const outA = srcA + dstA * (1 - srcA);
@@ -60,10 +82,8 @@ function renderIcon(size) {
       const dx = Math.min(x - r, ss - 1 - x - r, 0);
       const dy = Math.min(y - r, ss - 1 - y - r, 0);
       const d = Math.sqrt(dx * dx + dy * dy);
-      const inside = d <= r + 0.5;
-      if (inside) {
-        const edge = clamp(r + 0.5 - d, 0, 1);
-        set(x, y, BG, edge);
+      if (d <= r + 0.5) {
+        set(x, y, BG, clamp(r + 0.5 - d, 0, 1));
       }
     }
   }
@@ -71,40 +91,57 @@ function renderIcon(size) {
   const cx = ss / 2;
   const cy = ss / 2;
 
-  const ring = (radius, thickness, rgb, alpha) => {
-    for (let y = 0; y < ss; y++) {
-      for (let x = 0; x < ss; x++) {
-        const dx = x + 0.5 - cx;
-        const dy = y + 0.5 - cy;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        const dist = Math.abs(d - radius);
-        if (dist <= thickness / 2) {
-          const edge = clamp(thickness / 2 - dist + 0.5, 0, 1);
-          set(x, y, rgb, alpha * edge);
+  const layers = {
+    ring(radius, thickness, rgb, alpha, center) {
+      const ocx = cx + (center?.x ?? 0);
+      const ocy = cy + (center?.y ?? 0);
+      for (let y = 0; y < ss; y++) {
+        for (let x = 0; x < ss; x++) {
+          const dx = x + 0.5 - ocx;
+          const dy = y + 0.5 - ocy;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          const dist = Math.abs(d - radius);
+          if (dist <= thickness / 2) {
+            set(x, y, rgb, alpha * clamp(thickness / 2 - dist + 0.5, 0, 1));
+          }
         }
       }
-    }
-  };
-
-  const dot = (radius, rgb, alpha) => {
-    for (let y = 0; y < ss; y++) {
-      for (let x = 0; x < ss; x++) {
-        const dx = x + 0.5 - cx;
-        const dy = y + 0.5 - cy;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (d <= radius + 0.5) {
+    },
+    dot(radius, rgb, alpha, center) {
+      const ocx = cx + (center?.x ?? 0);
+      const ocy = cy + (center?.y ?? 0);
+      for (let y = 0; y < ss; y++) {
+        for (let x = 0; x < ss; x++) {
+          const dx = x + 0.5 - ocx;
+          const dy = y + 0.5 - ocy;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d <= radius + 0.5) {
+            set(x, y, rgb, alpha * clamp(radius + 0.5 - d, 0, 1));
+          }
+        }
+      }
+    },
+    // Pie slice from startDeg to endDeg (0deg = +x axis, clockwise).
+    wedge(radius, startDeg, endDeg, rgb, alpha) {
+      const start = (startDeg * Math.PI) / 180;
+      const end = (endDeg * Math.PI) / 180;
+      for (let y = 0; y < ss; y++) {
+        for (let x = 0; x < ss; x++) {
+          const dx = x + 0.5 - cx;
+          const dy = y + 0.5 - cy;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d > radius + 0.5) continue;
+          let a = Math.atan2(dy, dx);
+          if (a < start) a += Math.PI * 2;
+          if (a < start || a > end) continue;
           const edge = clamp(radius + 0.5 - d, 0, 1);
           set(x, y, rgb, alpha * edge);
         }
       }
-    }
+    },
   };
 
-  // Two offset "breathing rings" evoking the animated highlight, plus a
-  // center dot echoing a spawn point.
-  ring(ss * 0.36, ss * 0.075, GOLD, 0.95);
-  ring(ss * 0.22, ss * 0.065, CYAN, 0.95);
-  dot(ss * 0.05, [255, 255, 255], 0.9);
+  target.draw(layers, ss);
 
   // Box-downsample ss x ss -> size x size.
   const out = new Uint8ClampedArray(size * size * 4);
@@ -193,11 +230,14 @@ function encodePNG(rgba, size) {
   ]);
 }
 
-fs.mkdirSync(OUT_DIR, { recursive: true });
-for (const size of SIZES) {
-  const rgba = renderIcon(size);
-  const png = encodePNG(rgba, size);
-  const outPath = path.join(OUT_DIR, `icon${size}.png`);
-  fs.writeFileSync(outPath, png);
-  console.log(`wrote ${outPath} (${png.length} bytes)`);
+for (const target of TARGETS) {
+  const outDir = path.join(__dirname, "..", ...target.outDir);
+  fs.mkdirSync(outDir, { recursive: true });
+  for (const size of SIZES) {
+    const rgba = renderIcon(target, size);
+    const png = encodePNG(rgba, size);
+    const outPath = path.join(outDir, `icon${size}.png`);
+    fs.writeFileSync(outPath, png);
+    console.log(`wrote ${outPath} (${png.length} bytes)`);
+  }
 }
